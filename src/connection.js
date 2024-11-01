@@ -88,12 +88,21 @@ class Connection extends events.EventEmitter {
     this.emit('disconnect', this);
   }
 
+  #write(data) {
+    return new Promise((resolve, reject) => {
+      this.#socket.write(data, (error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+  }
+
   send(data, raw = false) {
-    if (this.#state === CLOSING) return;
-    if (raw) return void this.#socket.write(data);
+    if (this.#state === CLOSING) return Promise.resolve();
+    if (raw) return this.#write(data);
     if (typeof data === 'string') {
       const message = builder.fromString(data);
-      return void this.#socket.write(message);
+      return this.#write(message);
     }
   }
 
