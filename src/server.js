@@ -18,14 +18,14 @@ class WebSocketServer extends events.EventEmitter {
       }
       this.#onUpgrade(request, new Connection(socket));
     });
-    server.listen(options.port, options.config);
+    server.listen(options.port, options.host);
   }
 
   #onUpgrade(request, connection) {
     const { headers } = request;
     const key = headers['sec-websocket-key'];
     const hashed = hash(key);
-    connection.send(handshake.success(hashed), true);
+    connection.writeRaw(handshake.success(hashed), 'utf-8');
     connection.on('disconnect', this.#onDisconnect.bind(this));
     this.#connections.add(connection);
     this.emit('connection', connection);
