@@ -1,10 +1,11 @@
 'use strict';
 
-const events = require('node:events');
 const { builder, parser } = require('./frame/main.js');
 const buffer = require('node:buffer');
 const getFrames = require('./getFrames.js');
 const { Buffer } = buffer;
+const stream = require('node:stream');
+const { StringDecoder } = require('node:string_decoder');
 
 const preparePong = (pingFrame) => {
   const content = parser.content(pingFrame);
@@ -19,28 +20,50 @@ const prepareClose = () => Buffer.from([136, 0]); // to do
 
 const preparePing = () => Buffer.from([137, 0]); // to do
 
-const OPEN = 0;
-const CLOSING = 1;
-const CLOSED = 2;
+const OPEN = 1;
+const CLOSING = 2;
+const CLOSED = 3;
 
 const PING_TIMEOUT = 3000;
 
-class Connection extends events.EventEmitter {
+class Connection extends stream.Duplex {
   #socket = null;
-  #state = OPEN;
   #pingTimer = null;
+  #state = OPEN;
 
-  constructor(socket) {
-    super();
+  constructor(socket, options = {}) {
+    super({ ...options, decodeStrings: false });
+    socket.pause();
     this.#socket = socket;
     this.#getMessages();
-    socket.on('end', this.#onEnd.bind(this));
+  }
+
+  writeRaw(chunk, encoding, callback) {
+    if (this.#state === CLOSING) {
+      return void callback(new Error('Socket in state \'CLOSING\''));
+    }
+    return this.#socket.write(chunk, encoding, callback);
+  }
+
+  _write(chunk, encoding, callback) {
+    if (this.#state === CLOSING) {
+      return void callback(new Error('Socket in state \'CLOSING\''));
+    }
+    if (encoding !== 'buffer') {
+      const message = builder.fromString(chunk);
+      return this.writeRaw(message, encoding, callback);
+    }
+    callback();
+  }
+
+  _read() {
+    this.#socket.resume();
   }
 
   #getMessages() {
     const chunks = [];
-    const decoder = new TextDecoder();
-    let dataType = -1;
+    const decoder = new StringDecoder('utf-8');
+    let dataType = 0;
     getFrames(this.#socket, (last, frame) => {
       const opcode = frame[0] & 15;
       const masked = frame[1] & 128;
@@ -55,12 +78,13 @@ class Connection extends events.EventEmitter {
       const mask = parser.mask(frame);
       const message = Uint8Array.from(content, (elt, i) => elt ^ mask[i % 4]);
       if (dataType === 1 && !buffer.isUtf8(message)) return void this.close();
-      const chunk = dataType === 1 ? decoder.decode(message) : message;
+      const chunk = dataType === 1 ? decoder.write(message) : message;
       chunks.push(chunk);
       if (last === 0) return;
       const result = dataType === 1 ? chunks.join('') : Buffer.concat(chunks);
       chunks.length = 0;
-      this.emit('message', result);
+      this.push(result);
+      this.#socket.pause();
     });
   }
 
@@ -78,7 +102,7 @@ class Connection extends events.EventEmitter {
 
   #onPing(frame) {
     const message = preparePong(frame);
-    this.send(message, true);
+    this.writeRaw(message);
   }
 
   #onEnd() {
@@ -88,34 +112,16 @@ class Connection extends events.EventEmitter {
     this.emit('disconnect', this);
   }
 
-  #write(data) {
-    return new Promise((resolve, reject) => {
-      this.#socket.write(data, (error) => {
-        if (error) reject(error);
-        else resolve();
-      });
-    });
-  }
-
-  send(data, raw = false) {
-    if (this.#state === CLOSING) return Promise.resolve();
-    if (raw) return this.#write(data);
-    if (typeof data === 'string') {
-      const message = builder.fromString(data);
-      return this.#write(message);
-    }
-  }
-
   close() {
     const closingFrame = prepareClose();
-    this.send(closingFrame, true);
+    this.writeRaw(closingFrame);
     this.#state = CLOSING;
   }
 
   ping() {
     if (this.#pingTimer) return;
     const pingFrame = preparePing();
-    this.send(pingFrame, true);
+    this.writeRaw(pingFrame);
     this.#pingTimer = setTimeout(this.#onEnd.bind(this), PING_TIMEOUT);
   }
 }
