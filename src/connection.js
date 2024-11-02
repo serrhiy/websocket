@@ -20,7 +20,6 @@ const prepareClose = () => Buffer.from([136, 0]); // to do
 
 const preparePing = () => Buffer.from([137, 0]); // to do
 
-const CONNECTING = 0;
 const OPEN = 1;
 const CLOSING = 2;
 const CLOSED = 3;
@@ -30,23 +29,31 @@ const PING_TIMEOUT = 3000;
 class Connection extends stream.Duplex {
   #socket = null;
   #pingTimer = null;
+  #state = OPEN;
 
   constructor(socket, options = {}) {
-    super(options);
+    super({ ...options, decodeStrings: false });
     socket.pause();
     this.#socket = socket;
     this.#getMessages();
   }
 
   writeRaw(chunk, encoding, callback) {
+    if (this.#state === CLOSING) {
+      return void callback(new Error('Socket in state \'CLOSING\''));
+    }
     return this.#socket.write(chunk, encoding, callback);
   }
 
   _write(chunk, encoding, callback) {
-    if (encoding !== 'binary') {
+    if (this.#state === CLOSING) {
+      return void callback(new Error('Socket in state \'CLOSING\''));
+    }
+    if (encoding !== 'buffer') {
       const message = builder.fromString(chunk);
       return this.writeRaw(message, encoding, callback);
     }
+    callback();
   }
 
   _read() {
@@ -82,6 +89,8 @@ class Connection extends stream.Duplex {
   }
 
   #onClosing() {
+    if (this.#state !== CLOSING) this.close();
+    this.#state = CLOSED;
     return void this.#onEnd();
   }
 
@@ -105,13 +114,14 @@ class Connection extends stream.Duplex {
 
   close() {
     const closingFrame = prepareClose();
-    this.send(closingFrame, true);
+    this.writeRaw(closingFrame);
+    this.#state = CLOSING;
   }
 
   ping() {
     if (this.#pingTimer) return;
     const pingFrame = preparePing();
-    this.send(pingFrame, true);
+    this.writeRaw(pingFrame);
     this.#pingTimer = setTimeout(this.#onEnd.bind(this), PING_TIMEOUT);
   }
 }
