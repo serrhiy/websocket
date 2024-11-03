@@ -106,6 +106,7 @@ class Connection extends stream.Duplex {
     if (this.#pingTimer) clearTimeout(this.#pingTimer);
     this.#socket.destroy();
     this.#socket.removeAllListeners();
+    this.close();
     this.emit('disconnect', this);
   }
 
