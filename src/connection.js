@@ -6,6 +6,7 @@ const getFrames = require('./getFrames.js');
 const { Buffer } = buffer;
 const stream = require('node:stream');
 const { StringDecoder } = require('node:string_decoder');
+const AsyncQueue = require('./AsyncQueue.js');
 
 const preparePong = (pingFrame) => {
   const content = parser.content(pingFrame);
@@ -32,10 +33,10 @@ class Connection extends stream.Duplex {
   #pingTimeoutTimer = null;
   #pingTimer = null;
   #state = OPEN;
+  #messages = new AsyncQueue();
 
   constructor(socket, options = {}) {
     super({ ...options, decodeStrings: false });
-    socket.pause();
     this.#socket = socket;
     this.#getMessages();
     this.#startAutoPing();
@@ -43,7 +44,7 @@ class Connection extends stream.Duplex {
 
   writeRaw(chunk, encoding, callback) {
     if (this.#state === CLOSING) {
-      callback(new Error('Socket in state \'CLOSING\''));
+      callback(new Error("Socket in state 'CLOSING'"));
       return false;
     }
     return this.#socket.write(chunk, encoding, callback);
@@ -55,7 +56,7 @@ class Connection extends stream.Duplex {
   }
 
   _read() {
-    this.#socket.resume();
+    this.#messages.get().then((message) => void this.push(message));
   }
 
   #getMessages() {
@@ -82,8 +83,7 @@ class Connection extends stream.Duplex {
       if (last === 0) return;
       const result = dataType === 1 ? chunks.join('') : Buffer.concat(chunks);
       chunks.length = 0;
-      this.push(result);
-      this.#socket.pause();
+      this.#messages.add(result);
     });
   }
 
@@ -115,10 +115,12 @@ class Connection extends stream.Duplex {
     this.#socket.destroy();
     this.#socket.removeAllListeners();
     return new Promise((resolve, reject) => {
-      this.close().then(() => {
-        this.emit('disconnect', this);
-        resolve();    
-      }).catch(reject)
+      this.close()
+        .then(() => {
+          this.emit('disconnect', this);
+          resolve();
+        })
+        .catch(reject);
     });
   }
 
@@ -137,10 +139,10 @@ class Connection extends stream.Duplex {
   }
 
   ping() {
-    if (this.#pingTimer) clearTimeout(this.#pingTimer);
-    if (this.#pingTimeoutTimer) return resolve();
-    const pingFrame = preparePing();
     return new Promise((resolve, reject) => {
+      if (this.#pingTimer) clearTimeout(this.#pingTimer);
+      if (this.#pingTimeoutTimer) return void resolve();
+      const pingFrame = preparePing();
       this.writeRaw(pingFrame, 'buffer', (error) => {
         if (error) {
           this.close();
