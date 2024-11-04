@@ -111,24 +111,47 @@ class Connection extends stream.Duplex {
 
   #onEnd() {
     if (this.#pingTimeoutTimer) clearTimeout(this.#pingTimeoutTimer);
+    if (this.#pingTimer) clearTimeout(this.#pingTimeoutTimer);
     this.#socket.destroy();
     this.#socket.removeAllListeners();
-    this.close();
-    this.emit('disconnect', this);
+    return new Promise((resolve, reject) => {
+      this.close().then(() => {
+        this.emit('disconnect', this);
+        resolve();    
+      }).catch(reject)
+    });
   }
 
   close() {
-    const closingFrame = prepareClose();
-    this.writeRaw(closingFrame);
-    this.#state = CLOSING;
+    return new Promise((resolve, reject) => {
+      const closingFrame = prepareClose();
+      this.writeRaw(closingFrame, 'buffer', (error) => {
+        if (error) {
+          this.#onEnd();
+          return void reject(error);
+        }
+        this.#state = CLOSING;
+        resolve();
+      });
+    });
   }
 
   ping() {
     if (this.#pingTimer) clearTimeout(this.#pingTimer);
-    if (this.#pingTimeoutTimer) return;
+    if (this.#pingTimeoutTimer) return resolve();
     const pingFrame = preparePing();
-    this.writeRaw(pingFrame);
-    this.#pingTimeoutTimer = setTimeout(this.#onEnd.bind(this), PING_TIMEOUT);
+    return new Promise((resolve, reject) => {
+      this.writeRaw(pingFrame, 'buffer', (error) => {
+        if (error) {
+          this.close();
+          return void reject(error);
+        }
+        this.#pingTimeoutTimer = setTimeout(() => {
+          this.#onEnd();
+        }, PING_TIMEOUT);
+        resolve();
+      });
+    });
   }
 }
 
