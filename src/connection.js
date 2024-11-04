@@ -25,9 +25,11 @@ const CLOSING = 2;
 const CLOSED = 3;
 
 const PING_TIMEOUT = 3000;
+const PING_SENDING_INTERVAL = 5000;
 
 class Connection extends stream.Duplex {
   #socket = null;
+  #pingTimeoutTimer = null;
   #pingTimer = null;
   #state = OPEN;
 
@@ -36,6 +38,7 @@ class Connection extends stream.Duplex {
     socket.pause();
     this.#socket = socket;
     this.#getMessages();
+    this.#startAutoPing();
   }
 
   writeRaw(chunk, encoding, callback) {
@@ -60,6 +63,7 @@ class Connection extends stream.Duplex {
     const decoder = new StringDecoder('utf-8');
     let dataType = 0;
     getFrames(this.#socket, (last, frame) => {
+      this.#startAutoPing();
       const opcode = frame[0] & 15;
       const masked = frame[1] & 128;
       const rsv = frame[0] & 112;
@@ -83,6 +87,11 @@ class Connection extends stream.Duplex {
     });
   }
 
+  #startAutoPing() {
+    if (this.#pingTimer) clearTimeout(this.#pingTimer);
+    this.#pingTimer = setTimeout(this.ping.bind(this), PING_SENDING_INTERVAL);
+  }
+
   #onClosing() {
     if (this.#state !== CLOSING) this.close();
     this.#state = CLOSED;
@@ -90,9 +99,9 @@ class Connection extends stream.Duplex {
   }
 
   #onPong() {
-    if (!this.#pingTimer) return;
-    clearTimeout(this.#pingTimer);
-    this.#pingTimer = null;
+    if (!this.#pingTimeoutTimer) return;
+    clearTimeout(this.#pingTimeoutTimer);
+    this.#pingTimeoutTimer = null;
   }
 
   #onPing(frame) {
@@ -101,7 +110,7 @@ class Connection extends stream.Duplex {
   }
 
   #onEnd() {
-    if (this.#pingTimer) clearTimeout(this.#pingTimer);
+    if (this.#pingTimeoutTimer) clearTimeout(this.#pingTimeoutTimer);
     this.#socket.destroy();
     this.#socket.removeAllListeners();
     this.close();
@@ -115,10 +124,11 @@ class Connection extends stream.Duplex {
   }
 
   ping() {
-    if (this.#pingTimer) return;
+    if (this.#pingTimer) clearTimeout(this.#pingTimer);
+    if (this.#pingTimeoutTimer) return;
     const pingFrame = preparePing();
     this.writeRaw(pingFrame);
-    this.#pingTimer = setTimeout(this.#onEnd.bind(this), PING_TIMEOUT);
+    this.#pingTimeoutTimer = setTimeout(this.#onEnd.bind(this), PING_TIMEOUT);
   }
 }
 
