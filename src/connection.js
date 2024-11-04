@@ -40,17 +40,15 @@ class Connection extends stream.Duplex {
 
   writeRaw(chunk, encoding, callback) {
     if (this.#state === CLOSING) {
-      return void callback(new Error('Socket in state \'CLOSING\''));
+      callback(new Error('Socket in state \'CLOSING\''));
+      return false;
     }
     return this.#socket.write(chunk, encoding, callback);
   }
 
   _write(chunk, encoding, callback) {
-    if (encoding !== 'buffer') {
-      const message = builder.fromString(chunk);
-      return this.writeRaw(message, encoding, callback);
-    }
-    callback();
+    const message = builder(chunk);
+    return this.writeRaw(message, 'buffer', callback);
   }
 
   _read() {
