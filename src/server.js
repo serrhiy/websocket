@@ -9,10 +9,10 @@ const Connection = require('./connection.js');
 class WebSocketServer extends events.EventEmitter {
   #connections = new Set();
 
-  constructor(server, options) {
+  constructor(server, options, validator = () => true) {
     super();
     server.on('upgrade', (request, socket) => {
-      if (!validRequest(request)) {
+      if (!validRequest(request) || !validator(request.headers)) {
         const answer = handshake.error('Invalid Request');
         return void socket.end(answer);
       }
