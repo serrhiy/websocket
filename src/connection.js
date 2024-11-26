@@ -111,49 +111,42 @@ class Connection extends stream.Duplex {
 
   #onEnd() {
     if (this.#pingTimeoutTimer) clearTimeout(this.#pingTimeoutTimer);
-    if (this.#pingTimer) clearTimeout(this.#pingTimeoutTimer);
+    if (this.#pingTimer) clearTimeout(this.#pingTimer);
     this.#socket.destroy();
     this.#socket.removeAllListeners();
-    return new Promise((resolve, reject) => {
-      this.close()
-        .then(() => {
-          this.emit('disconnect', this);
-          resolve();
-        })
-        .catch(reject);
-    });
+    this.emit('disconnect', this);
   }
 
   close() {
-    return new Promise((resolve, reject) => {
-      const closingFrame = prepareClose();
-      this.writeRaw(closingFrame, 'buffer', (error) => {
-        if (error) {
-          this.#onEnd();
-          return void reject(error);
-        }
-        this.#state = CLOSING;
-        resolve();
-      });
+    const closingFrame = prepareClose();
+    const { promise, resolve, reject } = Promise.withResolvers();
+    this.writeRaw(closingFrame, 'buffer', (error) => {
+      if (error) {
+        this.#onEnd();
+        return void reject(error);
+      }
+      this.#state = CLOSING;
+      resolve();
     });
+    return promise;
   }
 
   ping() {
-    return new Promise((resolve, reject) => {
-      if (this.#pingTimer) clearTimeout(this.#pingTimer);
-      if (this.#pingTimeoutTimer) return void resolve();
-      const pingFrame = preparePing();
-      this.writeRaw(pingFrame, 'buffer', (error) => {
-        if (error) {
-          this.close();
-          return void reject(error);
-        }
-        this.#pingTimeoutTimer = setTimeout(() => {
-          this.#onEnd();
-        }, PING_TIMEOUT);
-        resolve();
-      });
+    const { promise, resolve, reject } = Promise.withResolvers();
+    if (this.#pingTimer) clearTimeout(this.#pingTimer);
+    if (this.#pingTimeoutTimer) return void resolve();
+    const pingFrame = preparePing();
+    this.writeRaw(pingFrame, 'buffer', (error) => {
+      if (error) {
+        this.#onEnd();
+        return void reject(error);
+      }
+      this.#pingTimeoutTimer = setTimeout(() => {
+        this.#onEnd();
+      }, PING_TIMEOUT);
+      resolve();
     });
+    return promise;
   }
 }
 
